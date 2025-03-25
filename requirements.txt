@@ -1,0 +1,4 @@
+flask==2.0.1
+smartapi-python==1.4.0
+pyotp==2.6.0
+logzero==1.7.0

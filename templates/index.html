@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Order Flow Chart</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #fff;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+        #controls {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        #orderFlowChart {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .sell-volume {
+            fill: rgba(255, 99, 132, 0.7);
+        }
+        .buy-volume {
+            fill: rgba(75, 192, 192, 0.7);
+        }
+        .axis text {
+            fill: #fff;
+            font-size: 12px;
+        }
+        .axis path, .axis line {
+            stroke: #555;
+        }
+        .ltp-line {
+            stroke: yellow;
+            stroke-width: 1;
+            stroke-opacity: 0.5;
+            stroke-dasharray: 5,5;
+        }
+        .ltp-text {
+            fill: yellow;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Real-Time Order Flow Chart (NIFTY Futures)</h1>
+    <div id="controls">
+        <label for="timeInterval">Time Interval (minutes):</label>
+        <input type="number" id="timeInterval" value="3" min="1">
+        <label for="tickSize">Tick Size:</label>
+        <input type="number" id="tickSize" value="3" min="0.1" step="0.1">
+        <button onclick="updateInterval()">Update</button>
+    </div>
+    <div id="orderFlowChart"></div>
+
+    <script>
+        const margin = { top: 20, right: 80, bottom: 50, left: 50 };
+        const width = 1200 - margin.left - margin.right;  // Canvas width
+        const height = 600 - margin.top - margin.bottom;  // Canvas height
+        const priceLevelHeight = 20;  // Fixed height per price level (no additional spacing)
+        const timeBucketWidth = 100;  // Width for each time bucket
+        const halfBucketWidth = timeBucketWidth / 2;  // Half of the time bucket width for buy/sell blocks
+        const sellTextX = halfBucketWidth / 2;  // Center of the left half (25 pixels)
+        const buyTextX = halfBucketWidth + halfBucketWidth / 2;  // Center of the right half (75 pixels)
+
+        const svg = d3.select("#orderFlowChart")
+            .append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom);
+
+        const g = svg.append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // Clip path to prevent drawing outside the chart area
+        svg.append("defs").append("clipPath")
+            .attr("id", "clip")
+            .append("rect")
+            .attr("width", width)
+            .attr("height", height);
+
+        const chartGroup = g.append("g")
+            .attr("clip-path", "url(#clip)");
+
+        let ltp = null;
+        let xScale, yScale;
+        let translateX = 0;  // Track panning translation (X-axis)
+        let translateY = 0;  // Track panning translation (Y-axis)
+
+        function updateChart(data) {
+            // Get user-defined tick size and time interval
+            const tickSize = parseFloat(document.getElementById("tickSize").value) || 3;
+            const timeIntervalMinutes = parseInt(document.getElementById("timeInterval").value) || 3;
+
+            // Parse data
+            let timeBuckets = Object.keys(data.trade_data)
+                .map(time => ({
+                    time: new Date(time),
+                    prices: Object.keys(data.trade_data[time]).map(price => ({
+                        price: parseFloat(price),
+                        buy_volume: data.trade_data[time][price].buy_volume,
+                        sell_volume: data.trade_data[time][price].sell_volume
+                    }))
+                }))
+                .sort((a, b) => a.time - b.time);
+
+            // Update LTP
+            ltp = data.ltp;
+
+            // Dynamically extend X-axis to fill the canvas
+            if (timeBuckets.length > 0) {
+                const lastTime = timeBuckets[timeBuckets.length - 1].time;
+                const visibleTimeBuckets = Math.ceil(width / timeBucketWidth) + 1;  // Number of time buckets to fill the canvas
+                const currentTimeBuckets = timeBuckets.length;
+                const additionalBucketsNeeded = Math.max(0, visibleTimeBuckets - currentTimeBuckets);
+                for (let i = 1; i <= additionalBucketsNeeded; i++) {
+                    const newTime = new Date(lastTime.getTime() + timeIntervalMinutes * 60 * 1000 * i);
+                    timeBuckets.push({ time: newTime, prices: [] });
+                }
+            }
+
+            // Get all price levels and ensure they are multiples of tickSize
+            let allPrices = [...new Set(timeBuckets.flatMap(bucket => bucket.prices.map(d => d.price)))];
+            let minPrice = allPrices.length > 0 ? Math.floor(d3.min(allPrices) / tickSize) * tickSize : 0;
+            let maxPrice = allPrices.length > 0 ? Math.ceil(d3.max(allPrices) / tickSize) * tickSize : tickSize;
+
+            // Round LTP to the nearest price level
+            const roundedLtp = ltp ? Math.round(ltp / tickSize) * tickSize : minPrice;
+
+            // Dynamically extend Y-axis to fill the canvas
+            const visiblePriceLevels = Math.ceil(height / priceLevelHeight) + 1;  // Number of price levels to fill the canvas
+            const currentPriceLevels = Math.round((maxPrice - minPrice) / tickSize) + 1;
+            const additionalLevelsNeeded = Math.max(0, visiblePriceLevels - currentPriceLevels);
+            const levelsToAddEachSide = Math.ceil(additionalLevelsNeeded / 2);
+            minPrice = minPrice - levelsToAddEachSide * tickSize;
+            maxPrice = maxPrice + levelsToAddEachSide * tickSize;
+
+            allPrices = [];
+            for (let price = minPrice; price <= maxPrice; price += tickSize) {
+                allPrices.push(price);
+            }
+            allPrices.sort((a, b) => b - a);
+
+            // Scales
+            xScale = d3.scaleBand()
+                .domain(timeBuckets.map(d => d.time))
+                .range([0, timeBuckets.length * timeBucketWidth])
+                .padding(0.2);
+
+            // Use a band scale for Y-axis with no additional spacing between price levels
+            yScale = d3.scaleBand()
+                .domain(allPrices)
+                .range([0, allPrices.length * priceLevelHeight])
+                .padding(0);  // No padding between price levels
+
+            const maxVolume = Math.max(
+                ...timeBuckets.flatMap(bucket => bucket.prices.map(d => Math.max(d.buy_volume, d.sell_volume)))
+            );
+            const volumeScale = d3.scaleLinear()
+                .domain([0, maxVolume])
+                .range([0, halfBucketWidth]);  // Limit width to half of the time bucket width
+
+            // Update axes
+            g.selectAll(".x-axis").remove();
+            g.append("g")
+                .attr("class", "x-axis axis")
+                .attr("transform", `translate(${translateX},${height})`)
+                .call(d3.axisBottom(xScale).tickFormat(d3.timeFormat("%H:%M")));
+
+            g.selectAll(".y-axis").remove();
+            g.append("g")
+                .attr("class", "y-axis axis")
+                .attr("transform", `translate(0,${translateY})`)
+                .call(d3.axisLeft(yScale));
+
+            // Clear previous chart elements
+            chartGroup.selectAll(".bucket-group").remove();
+            chartGroup.selectAll(".ltp-line").remove();
+            chartGroup.selectAll(".ltp-text").remove();
+
+            // Apply panning translation
+            chartGroup.attr("transform", `translate(${translateX},${translateY})`);
+
+            // Plot sell volumes (left half)
+            timeBuckets.forEach(bucket => {
+                const group = chartGroup.append("g")
+                    .attr("class", "bucket-group")
+                    .attr("transform", `translate(${xScale(bucket.time)},0)`);
+
+                group.selectAll(".sell-volume")
+                    .data(bucket.prices)
+                    .enter()
+                    .append("rect")
+                    .attr("class", "sell-volume")
+                    .attr("x", d => halfBucketWidth - volumeScale(d.sell_volume))  // Start from the middle and extend left
+                    .attr("y", d => yScale(d.price))
+                    .attr("width", d => volumeScale(d.sell_volume))
+                    .attr("height", priceLevelHeight)
+                    .append("title")
+                    .text(d => `Sell: ${d.sell_volume}`);
+
+                group.selectAll(".sell-text")
+                    .data(bucket.prices)
+                    .enter()
+                    .append("text")
+                    .attr("x", sellTextX)  // Center of the left half (25 pixels)
+                    .attr("y", d => yScale(d.price) + priceLevelHeight / 2 + 4)
+                    .attr("text-anchor", "middle")  // Center the text horizontally
+                    .attr("fill", "#fff")
+                    .attr("font-size", "14px")
+                    .text(d => d.sell_volume > 0 ? d.sell_volume : "");
+            });
+
+            // Plot buy volumes (right half)
+            timeBuckets.forEach(bucket => {
+                const group = chartGroup.append("g")
+                    .attr("class", "bucket-group")
+                    .attr("transform", `translate(${xScale(bucket.time)},0)`);
+
+                group.selectAll(".buy-volume")
+                    .data(bucket.prices)
+                    .enter()
+                    .append("rect")
+                    .attr("class", "buy-volume")
+                    .attr("x", halfBucketWidth)  // Start from the middle and extend right
+                    .attr("y", d => yScale(d.price))
+                    .attr("width", d => volumeScale(d.buy_volume))
+                    .attr("height", priceLevelHeight)
+                    .append("title")
+                    .text(d => `Buy: ${d.buy_volume}`);
+
+                group.selectAll(".buy-text")
+                    .data(bucket.prices)
+                    .enter()
+                    .append("text")
+                    .attr("x", buyTextX)  // Center of the right half (75 pixels)
+                    .attr("y", d => yScale(d.price) + priceLevelHeight / 2 + 4)
+                    .attr("text-anchor", "middle")  // Center the text horizontally
+                    .attr("fill", "#fff")
+                    .attr("font-size", "14px")
+                    .text(d => d.buy_volume > 0 ? d.buy_volume : "");
+            });
+
+            // Add LTP line and text
+            if (ltp !== null) {
+                // Round LTP to the nearest price level in the yScale domain
+                const roundedLtp = Math.round(ltp / tickSize) * tickSize;
+                const ltpPosition = yScale(roundedLtp);
+
+                if (ltpPosition !== undefined) {  // Ensure the position is valid
+                    // Find the last time bucket with data
+                    const lastDataIndex = timeBuckets.findIndex(bucket => bucket.prices.length === 0) - 1;
+                    const currentTimeIndex = lastDataIndex >= 0 ? lastDataIndex : timeBuckets.length - 1;
+                    const ltpTimeIndex = currentTimeIndex + 1;  // Next interval for LTP text
+                    const currentXPosition = xScale(timeBuckets[currentTimeIndex].time);
+                    const ltpXPosition = xScale(timeBuckets[ltpTimeIndex].time);
+
+                    // Limit LTP line to the current X-axis interval
+                    chartGroup.append("line")
+                        .attr("class", "ltp-line")
+                        .attr("x1", 0)
+                        .attr("x2", currentXPosition + timeBucketWidth / 2)  // End at the middle of the current interval
+                        .attr("y1", ltpPosition + priceLevelHeight / 2)
+                        .attr("y2", ltpPosition + priceLevelHeight / 2);
+
+                    // Place LTP text at the next X-axis interval
+                    chartGroup.append("text")
+                        .attr("class", "ltp-text")
+                        .attr("x", ltpXPosition + timeBucketWidth / 2)  // Center in the next interval
+                        .attr("y", ltpPosition + priceLevelHeight / 2 + 4)  // Align with the LTP line
+                        .attr("text-anchor", "middle")  // Center the text
+                        .text(`LTP: ${ltp.toFixed(2)}`);
+                }
+            }
+        }
+
+        // Panning functionality (both X and Y axes)
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+
+        svg.on("mousedown", (event) => {
+            isDragging = true;
+            startX = event.clientX - translateX;
+            startY = event.clientY - translateY;
+        });
+
+        svg.on("mousemove", (event) => {
+            if (isDragging) {
+                // Update X-axis panning
+                translateX = event.clientX - startX;
+                const maxTranslateX = 0;
+                const minTranslateX = -(timeBucketWidth * (Object.keys(trade_data).length - 1) - width);
+                translateX = Math.min(maxTranslateX, Math.max(minTranslateX, translateX));
+
+                // Update Y-axis panning
+                translateY = event.clientY - startY;
+                const maxTranslateY = 0;
+                const minTranslateY = -(yScale.range()[1] - height);
+                translateY = Math.min(maxTranslateY, Math.max(minTranslateY, translateY));
+
+                // Apply translations
+                chartGroup.attr("transform", `translate(${translateX},${translateY})`);
+                g.select(".x-axis")
+                    .attr("transform", `translate(${translateX},${height})`);
+                g.select(".y-axis")
+                    .attr("transform", `translate(0,${translateY})`);
+            }
+        });
+
+        svg.on("mouseup", () => {
+            isDragging = false;
+        });
+
+        svg.on("mouseleave", () => {
+            isDragging = false;
+        });
+
+        // Real-time updates using Server-Sent Events
+        const source = new EventSource('/stream');
+        source.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            trade_data = data.trade_data;  // Update global trade_data for panning bounds
+            updateChart(data);
+        };
+
+        // Update time interval and tick size
+        function updateInterval() {
+            const interval = document.getElementById("timeInterval").value;
+            const tickSize = document.getElementById("tickSize").value;
+            fetch('/set_interval', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `interval=${interval}&tickSize=${tickSize}`
+            })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Interval updated:', data.interval, 'Tick Size updated:', data.tickSize);
+                })
+                .catch(error => console.error('Error updating interval:', error));
+        }
+    </script>
+</body>
+</html>
