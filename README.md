@@ -4,8 +4,8 @@ A real-time order flow chart for NIFTY futures, built with Flask (Python) for th
 
 ## Features
 - Real-time updates using Server-Sent Events (SSE) and Angel One's SmartAPI WebSocket.
-- Visualizes buy and sell volumes as blocks, with numbers centered in each half of the time bucket.
-- LTP line and text, with the line limited to the current time bucket and the text in the next bucket.
+- Visualizes buy and sell volumes as blocks
+- LTP line and text
 - User-defined time interval and tick size for aggregating trades and rendering price levels.
 - Dynamic panning in both X and Y directions to adjust the visible range of time buckets and price levels.
 - Canvas dynamically filled with time buckets and price levels based on the canvas size, time interval, and tick size.
