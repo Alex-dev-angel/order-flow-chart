@@ -11,14 +11,14 @@ A real-time order flow chart for NIFTY futures, built with Flask (Python) for th
 - Canvas dynamically filled with time buckets and price levels based on the canvas size, time interval, and tick size.
 
 ## Project Structure
-
 order-flow-chart/
 │
-├── app.py              # Python backend (Flask app)
+├── app.py             
 ├── templates/
-│   └── index.html      # HTML frontend (D3.js chart)
-├── requirements.txt    # Python dependencies
-└── README.md           # Project documentation
+│   └── index.html     
+├── requirements.txt    
+└── README.md          
+
 
 ## Requirements
 - Python 3.6+
@@ -27,11 +27,10 @@ order-flow-chart/
 
 ## Setup Instructions
 1. **Clone the Repository** (after pushing to GitHub, see below for instructions):
-   ```bash
    git clone https://github.com/your-username/order-flow-chart.git
    cd order-flow-chart
 
-Install Dependencies:
+## Install Dependencies:
 Create a virtual environment and install the required Python packages:
 bash
 
@@ -39,7 +38,7 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-Update API Credentials:
+## Update API Credentials:
 Open app.py and replace the placeholder Angel One API credentials with your actual credentials:
 python
 
@@ -48,7 +47,7 @@ API_KEY = "your-api-key"
 CLIENT_CODE = "your-client-code"
 PASS = "your-password"
 
-Run the Application:
+## Run the Application:
 Start the Flask server:
 bash
 
@@ -56,7 +55,7 @@ python app.py
 
 Open your browser and navigate to http://localhost:5000.
 
-Usage
+## Usage
 The chart displays buy and sell volumes at different price levels over time.
 
 Use the input fields to set the time interval (in minutes) and tick size for aggregating trades and rendering price levels.
@@ -65,7 +64,7 @@ Click and drag the chart to pan in both X (time) and Y (price) directions to adj
 
 The LTP line and text update in real-time, with the line ending at the current time bucket and the text in the next bucket.
 
-Dependencies
+## Dependencies
 Flask: Web framework for the backend.
 
 SmartAPI-Python: Angel One API client for WebSocket data.
@@ -76,7 +75,7 @@ Logzero: For logging.
 
 D3.js: For rendering the chart in the frontend (loaded via CDN).
 
-Contributing
+## Contributing
 Fork the repository.
 
 Create a new branch (git checkout -b feature/your-feature).
