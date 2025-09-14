@@ -1,350 +1,858 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Order Flow Chart</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #1a1a1a;
-            color: #fff;
-            margin: 0;
-            padding: 20px;
-        }
-        h1 {
-            text-align: center;
-        }
-        #controls {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        #orderFlowChart {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        .sell-volume {
-            fill: rgba(255, 99, 132, 0.7);
-        }
-        .buy-volume {
-            fill: rgba(75, 192, 192, 0.7);
-        }
-        .axis text {
-            fill: #fff;
-            font-size: 12px;
-        }
-        .axis path, .axis line {
-            stroke: #555;
-        }
-        .ltp-line {
-            stroke: yellow;
-            stroke-width: 1;
-            stroke-opacity: 0.5;
-            stroke-dasharray: 5,5;
-        }
-        .ltp-text {
-            fill: yellow;
-            font-size: 12px;
-        }
-    </style>
+  <meta charset="utf-8" />
+  <title>Lightweight Charts – Live Footprint from Flask</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: #0b1020;
+      color: #cbd5e1;
+    }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+      padding: 10px 14px;
+      border-bottom: 1px solid #1f2937;
+      background: #111827;
+      position: sticky; top: 0; z-index: 10;
+    }
+    .toolbar label { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: #e5e7eb; }
+    .toolbar select, .toolbar input[type="number"], .toolbar button {
+      background: #0b1020; color: #e5e7eb; border: 1px solid #374151; border-radius: 6px; padding: 4px 8px;
+    }
+    .toolbar .group { display: inline-flex; gap: 8px; align-items: center; padding-right: 6px; border-right: 1px dashed #233044; }
+    .toolbar .group:last-child { border-right: none; }
+    #status { color: #f59e0b; font-size: 13px; }
+
+    .wrap { height: 82vh; min-height: 420px; padding: 12px; }
+    #chart-wrap {
+      position: relative; width: 100%; height: 100%;
+      border: 1px solid #1f2937; border-radius: 8px; overflow: hidden; background: #0b1020;
+    }
+    #chart { position: absolute; inset: 0; }
+    #footprint-canvas {
+      position: absolute; inset: 0; pointer-events: none; z-index: 1000;
+    }
+    .legend {
+      position: absolute; left: 12px; top: 12px; font-size: 12px;
+      background: rgba(2,6,23,0.7); border: 1px solid rgba(148,163,184,0.2);
+      backdrop-filter: blur(6px); border-radius: 6px; padding: 6px 8px; color: #e5e7eb; z-index: 5;
+    }
+    .legend b { color: #fff; }
+  </style>
 </head>
 <body>
-    <h1>Real-Time Order Flow Chart (NIFTY Futures)</h1>
-    <div id="controls">
-        <label for="timeInterval">Time Interval (minutes):</label>
-        <input type="number" id="timeInterval" value="3" min="1">
-        <label for="tickSize">Tick Size:</label>
-        <input type="number" id="tickSize" value="3" min="0.1" step="0.1">
-        <button onclick="updateInterval()">Update</button>
+  <div class="toolbar">
+    <div class="group">
+        <label>Interval (min) <input id="interval-min" type="number" min="1" max="60" step="1" value="1" style="width:60px" /></label>
+        <label>Tick Size <input id="tick-size" type="number" min="0.01" max="100" step="0.01" value="0.25" style="width:70px" /></label>
+        <button id="update-settings">Apply & Reset</button>
+        <span id="status"></span>
     </div>
-    <div id="orderFlowChart"></div>
+    <div class="group">
+      <label>Placement
+        <select id="placement">
+          <option value="side">Side-by-side</option>
+          <option value="overlay">Overlay</option>
+        </select>
+      </label>
+      <label><input id="show-candle" type="checkbox" checked /> Candle</label>
+      <label><input id="show-footprint" type="checkbox" checked /> Footprint</label>
+      <label><input id="show-profile" type="checkbox" /> Profile</label>
+    </div>
 
-    <script>
-        const margin = { top: 20, right: 80, bottom: 50, left: 50 };
-        const width = 1200 - margin.left - margin.right;  // Canvas width
-        const height = 600 - margin.top - margin.bottom;  // Canvas height
-        const priceLevelHeight = 20;  // Fixed height per price level (no additional spacing)
-        const timeBucketWidth = 100;  // Width for each time bucket
-        const halfBucketWidth = timeBucketWidth / 2;  // Half of the time bucket width for buy/sell blocks
-        const sellTextX = halfBucketWidth / 2;  // Center of the left half (25 pixels)
-        const buyTextX = halfBucketWidth + halfBucketWidth / 2;  // Center of the right half (75 pixels)
+    <div class="group" title="Side-by-side panel widths (normalized)">
+      <label>C% <input id="split-c" type="number" min="0" max="100" step="5" value="20" style="width:60px" /></label>
+      <label>F% <input id="split-f" type="number" min="0" max="100" step="5" value="80" style="width:60px" /></label>
+      <label>P% <input id="split-p" type="number" min="0" max="100" step="5" value="0" style="width:60px" /></label>
+      <label>Gap <input id="panel-gap" type="number" min="0" max="12" step="1" value="2" style="width:60px" /></label>
+      <label>Slot pad <input id="slot-pad" type="number" min="0" max="8" step="1" value="1" style="width:70px" /></label>
+      <button id="preset-cf">20/80</button>
+      <button id="preset-fp">50/50</button>
+      <button id="preset-all">20/50/30</button>
+    </div>
 
-        const svg = d3.select("#orderFlowChart")
-            .append("svg")
-            .attr("width", width + margin.left + margin.right)
-            .attr("height", height + margin.top + margin.bottom);
+    <div class="group">
+      <label><input id="toggle-numbers" type="checkbox" checked /> Numbers</label>
+      <label><input id="toggle-heat" type="checkbox" checked /> Heat</label>
+      <label><input id="toggle-outline" type="checkbox" /> Outlines</label>
+      <label><input id="toggle-poc" type="checkbox" checked /> POC</label>
+      <label><input id="toggle-stats" type="checkbox" checked /> Stats (Δ, minΔ, maxΔ, Vol, cumΔ)</label>
+    </div>
 
-        const g = svg.append("g")
-            .attr("transform", `translate(${margin.left},${margin.top})`);
+    <div class="group" title="Right-side split profile">
+      <label>Right profile
+        <select id="right-prof-mode">
+          <option value="off">Off</option>
+          <option value="visible">Visible range</option>
+          <option value="session">Session</option>
+        </select>
+      </label>
+      <label>Width <input id="right-prof-width" type="number" min="30" max="220" step="5" value="90" style="width:70px" /></label>
+      <label>Gap <input id="right-prof-gap" type="number" min="0" max="200" step="1" value="70" style="width:60px" /></label>
+    </div>
+  </div>
 
-        // Clip path to prevent drawing outside the chart area
-        svg.append("defs").append("clipPath")
-            .attr("id", "clip")
-            .append("rect")
-            .attr("width", width)
-            .attr("height", height);
+  <div class="wrap">
+    <div id="chart-wrap">
+      <div id="chart"></div>
+      <canvas id="footprint-canvas"></canvas>
+      <div class="legend">
+        <div><b>Live Footprint from Python/Flask</b></div>
+        <div>• Per-candle profile totals on the left</div>
+        <div>• Right profile next to price scale (split bid/ask), POC + VAH/VAL</div>
+        <div>• Stats stack starts at cumΔ anchor and only goes downward</div>
+      </div>
+    </div>
+  </div>
 
-        const chartGroup = g.append("g")
-            .attr("clip-path", "url(#clip)");
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
 
-        let ltp = null;
-        let xScale, yScale;
-        let translateX = 0;  // Track panning translation (X-axis)
-        let translateY = 0;  // Track panning translation (Y-axis)
+  <script>
+    const { createChart, CrosshairMode } = LightweightCharts;
+    const BG_COLOR = '#0b1020';
 
-        function updateChart(data) {
-            // Get user-defined tick size and time interval
-            const tickSize = parseFloat(document.getElementById("tickSize").value) || 3;
-            const timeIntervalMinutes = parseInt(document.getElementById("timeInterval").value) || 3;
+    // ---------- Live Data Storage ----------
+    const liveData = {
+      bars: [],
+      footprints: new Map(),
+      tick: 0.25,
+    };
+    const barStats = new Map();
 
-            // Parse data
-            let timeBuckets = Object.keys(data.trade_data)
-                .map(time => ({
-                    time: new Date(time),
-                    prices: Object.keys(data.trade_data[time]).map(price => ({
-                        price: parseFloat(price),
-                        buy_volume: data.trade_data[time][price].buy_volume,
-                        sell_volume: data.trade_data[time][price].sell_volume
-                    }))
-                }))
-                .sort((a, b) => a.time - b.time);
+    // ---------- Chart Initialization ----------
+    const chartContainer = document.getElementById('chart');
+    const fpCanvas = document.getElementById('footprint-canvas');
+    const chart = createChart(chartContainer, {
+      layout: { background: { type: 'solid', color: BG_COLOR }, textColor: '#cbd5e1', attributionLogo: false },
+      rightPriceScale: { borderVisible: false },
+      
+      timeScale: {
+        borderVisible: false,
+        timeVisible: true,
+        secondsVisible: true, // <-- SET TO TRUE
+        
+        tickMarkFormatter: (time, tickMarkType, locale) => {
+            const date = new Date(time * 1000);
+            return date.toLocaleTimeString(locale, {
+                timeZone: 'Asia/Kolkata',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit', // <-- ADD THIS LINE
+                hour12: false
+            });
+        },
+      },
+      
+      localization: {
+        timeFormatter: (time) => {
+            const date = new Date(time * 1000);
+            return date.toLocaleString('en-GB', {
+                timeZone: 'Asia/Kolkata',
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit', // <-- ADD THIS LINE
+                hour12: false,
+            });
+        }
+      },
+      grid: { vertLines: { color: '#111827', style: 0 }, horzLines: { color: '#111827', style: 0 } },
+      crosshair: { mode: CrosshairMode.Normal, vertLine: { width: 1, color: 'rgba(148,163,184,0.4)' }, horzLine: { width: 1, color: 'rgba(148,163,184,0.4)' } },
+      width: chartContainer.clientWidth,
+      height: chartContainer.clientHeight,
+    });
+    const defaultCandleColors = {
+      upColor: '#10b981', downColor: '#ef4444',
+      borderUpColor: '#10b981', borderDownColor: '#ef4444',
+      wickUpColor: '#10b981', wickDownColor: '#ef4444',
+    };
+    const candleSeries = chart.addCandlestickSeries({ ...defaultCandleColors });
 
-            // Update LTP
-            ltp = data.ltp;
+    // ---------- Options / UI ----------
+    const opts = {
+      placement: 'side',  showCandle: true, showFootprint: true, showProfile: false,
+      split: { c: 20, f: 80, p: 0 }, panelGapPx: 2, slotPadPx: 1,
+      drawNumbers: true, heat: true, outlines: false, showPOC: true, showStats: true,
+      rightProfileMode: 'off', rightProfileWidth: 90, rightProfileGap: 70, valueAreaPct: 0.70,
+    };
+    const $ = (id) => document.getElementById(id);
+    $('placement').addEventListener('change', e => { opts.placement = e.target.value; syncCandleVisibility(); draw(); });
+    $('show-candle').addEventListener('change', e => { opts.showCandle = e.target.checked; syncCandleVisibility(); draw(); });
+    $('show-footprint').addEventListener('change', e => { opts.showFootprint = e.target.checked; draw(); });
+    $('show-profile').addEventListener('change', e => { opts.showProfile = e.target.checked; draw(); });
+    $('split-c').addEventListener('change', e => { opts.split.c = Math.max(0, Number(e.target.value || 0)); draw(); });
+    $('split-f').addEventListener('change', e => { opts.split.f = Math.max(0, Number(e.target.value || 0)); draw(); });
+    $('split-p').addEventListener('change', e => { opts.split.p = Math.max(0, Number(e.target.value || 0)); draw(); });
+    $('panel-gap').addEventListener('change', e => { opts.panelGapPx = Math.max(0, Number(e.target.value || 0)); draw(); });
+    $('slot-pad').addEventListener('change', e => { opts.slotPadPx = Math.max(0, Number(e.target.value || 0)); draw(); });
+    $('preset-cf').addEventListener('click', () => { opts.split = { c:20, f:80, p:0 }; $('split-c').value=20; $('split-f').value=80; $('split-p').value=0; draw(); });
+    $('preset-fp').addEventListener('click', () => { opts.split = { c:0, f:50, p:50 }; $('split-c').value=0; $('split-f').value=50; $('split-p').value=50; draw(); });
+    $('preset-all').addEventListener('click', () => { opts.split = { c:20, f:50, p:30 }; $('split-c').value=20; $('split-f').value=50; $('split-p').value=30; draw(); });
+    $('toggle-numbers').addEventListener('change', e => { opts.drawNumbers = e.target.checked; draw(); });
+    $('toggle-heat').addEventListener('change', e => { opts.heat = e.target.checked; draw(); });
+    $('toggle-outline').addEventListener('change', e => { opts.outlines = e.target.checked; draw(); });
+    $('toggle-poc').addEventListener('change', e => { opts.showPOC = e.target.checked; draw(); });
+    $('toggle-stats').addEventListener('change', e => { opts.showStats = e.target.checked; draw(); });
+    $('right-prof-mode').addEventListener('change', e => { opts.rightProfileMode = e.target.value; draw(); });
+    $('right-prof-width').addEventListener('change', e => { opts.rightProfileWidth = Math.max(30, Number(e.target.value || 90)); draw(); });
+    $('right-prof-gap').addEventListener('change', e => { opts.rightProfileGap = Math.max(0, Number(e.target.value || 60)); draw(); });
 
-            // Dynamically extend X-axis to fill the canvas
-            if (timeBuckets.length > 0) {
-                const lastTime = timeBuckets[timeBuckets.length - 1].time;
-                const visibleTimeBuckets = Math.ceil(width / timeBucketWidth) + 1;  // Number of time buckets to fill the canvas
-                const currentTimeBuckets = timeBuckets.length;
-                const additionalBucketsNeeded = Math.max(0, visibleTimeBuckets - currentTimeBuckets);
-                for (let i = 1; i <= additionalBucketsNeeded; i++) {
-                    const newTime = new Date(lastTime.getTime() + timeIntervalMinutes * 60 * 1000 * i);
-                    timeBuckets.push({ time: newTime, prices: [] });
-                }
+    // ---------- Helper & Drawing Functions ----------
+    function dpr() { return window.devicePixelRatio || 1; }
+    function resizeCanvasToDisplaySize(canvas) {
+      const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+      const ratio = dpr();
+      if (canvas.width !== Math.floor(cssW * ratio) || canvas.height !== Math.floor(cssH * ratio)) {
+        canvas.width = Math.floor(cssW * ratio);
+        canvas.height = Math.floor(cssH * ratio);
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      return ctx;
+    }
+    function syncCanvasSize() {
+      fpCanvas.style.width = chartContainer.clientWidth + 'px';
+      fpCanvas.style.height = chartContainer.clientHeight + 'px';
+      resizeCanvasToDisplaySize(fpCanvas);
+    }
+    function getVisibleBarsWithX() {
+      const w = fpCanvas.clientWidth || chartContainer.clientWidth;
+      const out = [];
+      for (const b of liveData.bars) {
+        const x = chart.timeScale().timeToCoordinate(b.time);
+        if (x == null) continue;
+        if (x >= -50 && x <= w + 50) out.push({ ...b, x });
+      }
+      return out;
+    }
+    function median(arr) {
+      if (!arr.length) return 0;
+      const s = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+    }
+    function fmtNum(n) {
+      const sign = n < 0 ? '-' : '';
+      n = Math.abs(n);
+      if (n >= 1e9) return sign + (n / 1e9).toFixed(2).replace(/\.00$/, '') + 'B';
+      if (n >= 1e6) return sign + (n / 1e6).toFixed(2).replace(/\.00$/, '') + 'M';
+      if (n >= 1e3) return sign + (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+      return (sign ? '-' : '') + String(n);
+    }
+    function drawClampedPillTop(ctx, text, topY, centerX, slotLeft, slotRight, colors, fontPx, minFont=8) {
+      const padX = 4, padY = 2;
+      let fontSize = fontPx;
+      ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace`;
+      let w = Math.ceil(ctx.measureText(text).width + padX * 2);
+      let h = Math.ceil(fontSize + padY * 2);
+
+      const maxW = Math.max(10, Math.floor((slotRight - slotLeft) - 4));
+      while (w > maxW && fontSize > minFont) {
+        fontSize -= 1;
+        ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace`;
+        w = Math.ceil(ctx.measureText(text).width + padX * 2);
+        h = Math.ceil(fontSize + padY * 2);
+      }
+      if (w > maxW) return { drawn:false, w:0, h:0, y: topY };
+      if (topY + h > fpCanvas.clientHeight - 2) return { drawn:false, w:0, h:0, y: topY };
+
+      let x = Math.round(centerX - w / 2);
+      if (x < slotLeft + 2) x = slotLeft + 2;
+      if (x + w > slotRight - 2) x = slotRight - 2 - w;
+      const y = Math.round(topY);
+
+      ctx.fillStyle = colors.bg;
+      ctx.fillRect(x, y, w, h);
+      if (colors.border) { ctx.strokeStyle = colors.border; ctx.strokeRect(x, y, w, h); }
+      ctx.fillStyle = colors.fg;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+      ctx.fillText(text, x + w / 2, y + h / 2);
+
+      return { drawn:true, w, h, x, y };
+    }
+    function setCandleVisible(visible) {
+      if (visible) {
+        candleSeries.applyOptions({ ...defaultCandleColors });
+      } else {
+        const t = 'rgba(0,0,0,0)';
+        candleSeries.applyOptions({ upColor: t, downColor: t, borderUpColor: t, borderDownColor: t, wickUpColor: t, wickDownColor: t });
+      }
+    }
+    function syncCandleVisibility() {
+      const showNative = (opts.placement === 'overlay') && opts.showCandle;
+      setCandleVisible(showNative);
+    }
+    syncCandleVisibility();
+
+    function draw() {
+      const ctx = resizeCanvasToDisplaySize(fpCanvas);
+      const width = fpCanvas.clientWidth, height = fpCanvas.clientHeight;
+      ctx.clearRect(0, 0, width, height);
+
+      const visibles = getVisibleBarsWithX();
+      if (!visibles.length) return;
+
+      // --- FIX 1: Handle spacing for a single bar ---
+      // If only one bar is visible, we can't calculate spacing based on the distance
+      // between bars. Instead, we use the chart's currently configured bar spacing.
+      let spacing;
+      if (visibles.length < 2) {
+        spacing = chart.timeScale().options().barSpacing;
+      } else {
+        const dxs = [];
+        for (let i = 1; i < visibles.length; i++) dxs.push(visibles[i].x - visibles[i - 1].x);
+        spacing = Math.max(6, median(dxs));
+      }
+      
+      const slotPad = opts.slotPadPx;
+      const panelGap = opts.panelGapPx;
+      const minCellH = 3;
+      const minPanelW = 8;
+
+      let maxBid = 1, maxAsk = 1, maxTotal = 1;
+      for (const vb of visibles) {
+        const levels = liveData.footprints.get(vb.time) || [];
+        for (const lv of levels) {
+          if (lv.bidVol > maxBid) maxBid = lv.bidVol;
+          if (lv.askVol > maxAsk) maxAsk = lv.askVol;
+          const tot = lv.bidVol + lv.askVol;
+          if (tot > maxTotal) maxTotal = tot;
+        }
+      }
+
+      const drawThinCandle = (vb, rect) => {
+        const yH = candleSeries.priceToCoordinate(vb.high);
+        const yL = candleSeries.priceToCoordinate(vb.low);
+        const yO = candleSeries.priceToCoordinate(vb.open);
+        const yC = candleSeries.priceToCoordinate(vb.close);
+        if ([yH, yL, yO, yC].some(v => v == null)) return;
+        const up = vb.close >= vb.open;
+        const wickColor = 'rgba(148,163,184,0.65)';
+        const bodyColor = up ? 'rgba(16,185,129,0.95)' : 'rgba(239,68,68,0.95)';
+        const cx = Math.round(rect.left + rect.width / 2);
+
+        ctx.strokeStyle = wickColor; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(cx, Math.round(yH)); ctx.lineTo(cx, Math.round(yL)); ctx.stroke();
+
+        const bodyW = Math.max(3, Math.floor(rect.width * 0.75));
+        const bodyLeft = cx - Math.floor(bodyW / 2);
+        const top = Math.round(Math.min(yO, yC));
+        const h = Math.max(1, Math.round(Math.abs(yO - yC)));
+        ctx.fillStyle = bodyColor;
+        ctx.fillRect(bodyLeft, top, bodyW, h);
+      };
+
+      // --- FIX 2: Removed barYTop and barYBot parameters to prevent clipping ---
+           // --- REPLACEMENT for drawFootprintInRect ---
+      const drawFootprintInRect = (vb, levels, rect) => {
+        if (!levels || levels.length === 0) return;
+
+        // 1. Create a Map for efficient data lookup. This is much faster
+        //    than searching the array in a loop.
+        const levelsMap = new Map(levels.map(l => [l.price, l]));
+
+        // 2. Determine the full price range to draw. We now use the min/max price
+        //    from the footprint data itself, ensuring we draw everything, even
+        //    if it's outside the candle's high/low.
+        const minPrice = levels.reduce((p, c) => Math.min(p, c.price), Infinity);
+        const maxPrice = levels.reduce((p, c) => Math.max(p, c.price), -Infinity);
+        if (!isFinite(minPrice) || !isFinite(maxPrice)) return;
+
+        const left = rect.left, width = rect.width, mid = left + width / 2;
+
+        // 3. Iterate through every price level, tick-by-tick, from top to bottom.
+        //    We use a small tolerance (tick/2) to handle floating point inaccuracies.
+        for (let price = maxPrice; price >= minPrice - (liveData.tick / 2); price -= liveData.tick) {
+            
+          // Get data for the current price, or default to zero if none exists.
+          const data = levelsMap.get(price) || { bidVol: 0, askVol: 0 };
+          
+          // Calculate top and bottom Y coordinates for this single tick.
+          const y1 = candleSeries.priceToCoordinate(price);
+          const y2 = candleSeries.priceToCoordinate(price - liveData.tick);
+          if (y1 == null || y2 == null) continue;
+
+          const top = Math.min(y1, y2);
+          const bottom = Math.max(y1, y2);
+          const cellH = bottom - top;
+
+          if (cellH < minCellH) continue;
+          
+          const halfW = width / 2;
+
+          if (opts.heat) {
+            // We use data.bidVol and data.askVol here
+            const bidAlpha = Math.min(0.95, 0.16 + 0.84 * (data.bidVol / maxBid));
+            const askAlpha = Math.min(0.95, 0.16 + 0.84 * (data.askVol / maxAsk));
+            ctx.fillStyle = `rgba(239,68,68,${bidAlpha})`;
+            ctx.fillRect(left, top, halfW, cellH);
+            ctx.fillStyle = `rgba(16,185,129,${askAlpha})`;
+            ctx.fillRect(left + halfW, top, halfW, cellH);
+          } else {
+            ctx.fillStyle = 'rgba(148,163,184,0.18)';
+            ctx.fillRect(left, top, width, cellH);
+          }
+
+          if (opts.outlines) {
+            ctx.strokeStyle = 'rgba(148,163,184,0.30)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(Math.round(left), Math.round(top), Math.round(width), Math.round(cellH));
+            ctx.beginPath(); ctx.moveTo(Math.round(mid), Math.round(top)); ctx.lineTo(Math.round(mid), Math.round(bottom)); ctx.stroke();
+          }
+
+          if (opts.drawNumbers && width > 26 && cellH > 12) {
+            const fontSize = Math.min(12, Math.max(9, Math.floor(Math.min(cellH * 0.75, width * 0.45))));
+            ctx.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace`;
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#fecaca'; ctx.textAlign = 'right';
+            ctx.fillText(String(data.bidVol), mid - 2, top + cellH / 2); // Use data.bidVol
+            ctx.fillStyle = '#bbf7d0'; ctx.textAlign = 'left';
+            ctx.fillText(String(data.askVol), mid + 2, top + cellH / 2); // Use data.askVol
+          }
+        }
+      };
+
+      const drawProfileInRect = (levels, rect) => {
+        // Calculate max total for this specific candle's profile
+        const barMaxTotal = levels.reduce((max, lv) => Math.max(max, lv.bidVol + lv.askVol), 1);
+
+        // --- FIX: Create a map for efficient data lookup to handle gaps ---
+        const levelsMap = new Map(levels.map(l => [l.price, l]));
+        const minPrice = levels.reduce((p, c) => Math.min(p, c.price), Infinity);
+        const maxPrice = levels.reduce((p, c) => Math.max(p, c.price), -Infinity);
+        if (!isFinite(minPrice) || !isFinite(maxPrice)) return;
+
+        // Iterate through every price tick to ensure uniform block sizes
+        for (let price = maxPrice; price >= minPrice - (liveData.tick / 2); price -= liveData.tick) {
+            
+            const curr = levelsMap.get(price) || { bidVol: 0, askVol: 0 };
+            
+            let y1 = candleSeries.priceToCoordinate(price);
+            let y2 = candleSeries.priceToCoordinate(price - liveData.tick); // Draw one tick down
+            if (y1 == null || y2 == null) continue;
+
+            let top = Math.min(y1, y2);
+            let bottom = Math.max(y1, y2);
+            if (bottom <= top) continue;
+
+            const cellH = bottom - top;
+            if (cellH < minCellH) continue;
+
+            const total = curr.bidVol + curr.askVol;
+            const w = (total / barMaxTotal) * rect.width;
+            ctx.fillStyle = 'rgba(59,130,246,0.25)';
+            ctx.fillRect(rect.left, top, w, cellH);
+
+            // --- CORRECTED LOGIC ---
+            // The condition now checks rect.width (the panel's width) instead of w.
+            // This ensures text appears if the panel is wide enough, regardless of volume.
+            if (opts.drawNumbers && cellH >= 12 && rect.width >= 24) {
+                ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
+                ctx.fillStyle = '#93c5fd';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(fmtNum(total), rect.left + 2, top + cellH / 2);
             }
 
-            // Get all price levels and ensure they are multiples of tickSize
-            let allPrices = [...new Set(timeBuckets.flatMap(bucket => bucket.prices.map(d => d.price)))];
-            let minPrice = allPrices.length > 0 ? Math.floor(d3.min(allPrices) / tickSize) * tickSize : 0;
-            let maxPrice = allPrices.length > 0 ? Math.ceil(d3.max(allPrices) / tickSize) * tickSize : tickSize;
-
-            // Round LTP to the nearest price level
-            const roundedLtp = ltp ? Math.round(ltp / tickSize) * tickSize : minPrice;
-
-            // Dynamically extend Y-axis to fill the canvas
-            const visiblePriceLevels = Math.ceil(height / priceLevelHeight) + 1;  // Number of price levels to fill the canvas
-            const currentPriceLevels = Math.round((maxPrice - minPrice) / tickSize) + 1;
-            const additionalLevelsNeeded = Math.max(0, visiblePriceLevels - currentPriceLevels);
-            const levelsToAddEachSide = Math.ceil(additionalLevelsNeeded / 2);
-            minPrice = minPrice - levelsToAddEachSide * tickSize;
-            maxPrice = maxPrice + levelsToAddEachSide * tickSize;
-
-            allPrices = [];
-            for (let price = minPrice; price <= maxPrice; price += tickSize) {
-                allPrices.push(price);
-            }
-            allPrices.sort((a, b) => b - a);
-
-            // Scales
-            xScale = d3.scaleBand()
-                .domain(timeBuckets.map(d => d.time))
-                .range([0, timeBuckets.length * timeBucketWidth])
-                .padding(0.2);
-
-            // Use a band scale for Y-axis with no additional spacing between price levels
-            yScale = d3.scaleBand()
-                .domain(allPrices)
-                .range([0, allPrices.length * priceLevelHeight])
-                .padding(0);  // No padding between price levels
-
-            const maxVolume = Math.max(
-                ...timeBuckets.flatMap(bucket => bucket.prices.map(d => Math.max(d.buy_volume, d.sell_volume)))
-            );
-            const volumeScale = d3.scaleLinear()
-                .domain([0, maxVolume])
-                .range([0, halfBucketWidth]);  // Limit width to half of the time bucket width
-
-            // Update axes
-            g.selectAll(".x-axis").remove();
-            g.append("g")
-                .attr("class", "x-axis axis")
-                .attr("transform", `translate(${translateX},${height})`)
-                .call(d3.axisBottom(xScale).tickFormat(d3.timeFormat("%H:%M")));
-
-            g.selectAll(".y-axis").remove();
-            g.append("g")
-                .attr("class", "y-axis axis")
-                .attr("transform", `translate(0,${translateY})`)
-                .call(d3.axisLeft(yScale));
-
-            // Clear previous chart elements
-            chartGroup.selectAll(".bucket-group").remove();
-            chartGroup.selectAll(".ltp-line").remove();
-            chartGroup.selectAll(".ltp-text").remove();
-
-            // Apply panning translation
-            chartGroup.attr("transform", `translate(${translateX},${translateY})`);
-
-            // Plot sell volumes (left half)
-            timeBuckets.forEach(bucket => {
-                const group = chartGroup.append("g")
-                    .attr("class", "bucket-group")
-                    .attr("transform", `translate(${xScale(bucket.time)},0)`);
-
-                group.selectAll(".sell-volume")
-                    .data(bucket.prices)
-                    .enter()
-                    .append("rect")
-                    .attr("class", "sell-volume")
-                    .attr("x", d => halfBucketWidth - volumeScale(d.sell_volume))  // Start from the middle and extend left
-                    .attr("y", d => yScale(d.price))
-                    .attr("width", d => volumeScale(d.sell_volume))
-                    .attr("height", priceLevelHeight)
-                    .append("title")
-                    .text(d => `Sell: ${d.sell_volume}`);
-
-                group.selectAll(".sell-text")
-                    .data(bucket.prices)
-                    .enter()
-                    .append("text")
-                    .attr("x", sellTextX)  // Center of the left half (25 pixels)
-                    .attr("y", d => yScale(d.price) + priceLevelHeight / 2 + 4)
-                    .attr("text-anchor", "middle")  // Center the text horizontally
-                    .attr("fill", "#fff")
-                    .attr("font-size", "14px")
-                    .text(d => d.sell_volume > 0 ? d.sell_volume : "");
-            });
-
-            // Plot buy volumes (right half)
-            timeBuckets.forEach(bucket => {
-                const group = chartGroup.append("g")
-                    .attr("class", "bucket-group")
-                    .attr("transform", `translate(${xScale(bucket.time)},0)`);
-
-                group.selectAll(".buy-volume")
-                    .data(bucket.prices)
-                    .enter()
-                    .append("rect")
-                    .attr("class", "buy-volume")
-                    .attr("x", halfBucketWidth)  // Start from the middle and extend right
-                    .attr("y", d => yScale(d.price))
-                    .attr("width", d => volumeScale(d.buy_volume))
-                    .attr("height", priceLevelHeight)
-                    .append("title")
-                    .text(d => `Buy: ${d.buy_volume}`);
-
-                group.selectAll(".buy-text")
-                    .data(bucket.prices)
-                    .enter()
-                    .append("text")
-                    .attr("x", buyTextX)  // Center of the right half (75 pixels)
-                    .attr("y", d => yScale(d.price) + priceLevelHeight / 2 + 4)
-                    .attr("text-anchor", "middle")  // Center the text horizontally
-                    .attr("fill", "#fff")
-                    .attr("font-size", "14px")
-                    .text(d => d.buy_volume > 0 ? d.buy_volume : "");
-            });
-
-            // Add LTP line and text
-            if (ltp !== null) {
-                // Round LTP to the nearest price level in the yScale domain
-                const roundedLtp = Math.round(ltp / tickSize) * tickSize;
-                const ltpPosition = yScale(roundedLtp);
-
-                if (ltpPosition !== undefined) {  // Ensure the position is valid
-                    // Find the last time bucket with data
-                    const lastDataIndex = timeBuckets.findIndex(bucket => bucket.prices.length === 0) - 1;
-                    const currentTimeIndex = lastDataIndex >= 0 ? lastDataIndex : timeBuckets.length - 1;
-                    const ltpTimeIndex = currentTimeIndex + 1;  // Next interval for LTP text
-                    const currentXPosition = xScale(timeBuckets[currentTimeIndex].time);
-                    const ltpXPosition = xScale(timeBuckets[ltpTimeIndex].time);
-
-                    // Limit LTP line to the current X-axis interval
-                    chartGroup.append("line")
-                        .attr("class", "ltp-line")
-                        .attr("x1", 0)
-                        .attr("x2", currentXPosition + timeBucketWidth / 2)  // End at the middle of the current interval
-                        .attr("y1", ltpPosition + priceLevelHeight / 2)
-                        .attr("y2", ltpPosition + priceLevelHeight / 2);
-
-                    // Place LTP text at the next X-axis interval
-                    chartGroup.append("text")
-                        .attr("class", "ltp-text")
-                        .attr("x", ltpXPosition + timeBucketWidth / 2)  // Center in the next interval
-                        .attr("y", ltpPosition + priceLevelHeight / 2 + 4)  // Align with the LTP line
-                        .attr("text-anchor", "middle")  // Center the text
-                        .text(`LTP: ${ltp.toFixed(2)}`);
-                }
+            if (opts.outlines) {
+                ctx.strokeStyle = 'rgba(148,163,184,0.25)';
+                ctx.lineWidth = 1;
+                // Draw outline around the cell, not the heatmap bar
+                ctx.strokeRect(Math.round(rect.left), Math.round(top), Math.round(rect.width), Math.round(cellH));
             }
         }
-
-        // Panning functionality (both X and Y axes)
-        let isDragging = false;
-        let startX = 0;
-        let startY = 0;
-
-        svg.on("mousedown", (event) => {
-            isDragging = true;
-            startX = event.clientX - translateX;
-            startY = event.clientY - translateY;
-        });
-
-        svg.on("mousemove", (event) => {
-            if (isDragging) {
-                // Update X-axis panning
-                translateX = event.clientX - startX;
-                const maxTranslateX = 0;
-                const minTranslateX = -(timeBucketWidth * (Object.keys(trade_data).length - 1) - width);
-                translateX = Math.min(maxTranslateX, Math.max(minTranslateX, translateX));
-
-                // Update Y-axis panning
-                translateY = event.clientY - startY;
-                const maxTranslateY = 0;
-                const minTranslateY = -(yScale.range()[1] - height);
-                translateY = Math.min(maxTranslateY, Math.max(minTranslateY, translateY));
-
-                // Apply translations
-                chartGroup.attr("transform", `translate(${translateX},${translateY})`);
-                g.select(".x-axis")
-                    .attr("transform", `translate(${translateX},${height})`);
-                g.select(".y-axis")
-                    .attr("transform", `translate(0,${translateY})`);
-            }
-        });
-
-        svg.on("mouseup", () => {
-            isDragging = false;
-        });
-
-        svg.on("mouseleave", () => {
-            isDragging = false;
-        });
-
-        // Real-time updates using Server-Sent Events
-        const source = new EventSource('/stream');
-        source.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            trade_data = data.trade_data;  // Update global trade_data for panning bounds
-            updateChart(data);
-        };
-
-        // Update time interval and tick size
-        function updateInterval() {
-            const interval = document.getElementById("timeInterval").value;
-            const tickSize = document.getElementById("tickSize").value;
-            fetch('/set_interval', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `interval=${interval}&tickSize=${tickSize}`
-            })
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Interval updated:', data.interval, 'Tick Size updated:', data.tickSize);
-                })
-                .catch(error => console.error('Error updating interval:', error));
+      };
+            const outlinePOC = (levels, rect) => {
+        if (!opts.showPOC || !levels || levels.length === 0) return; // Added safety checks
+        
+        let pocIdx = -1;
+        let pocTotal = -1;
+        
+        // Find the price level with the highest total volume (the POC)
+        for (let j = 0; j < levels.length; j++) {
+          const lv = levels[j];
+          const tot = lv.bidVol + lv.askVol;
+          if (tot > pocTotal) {
+            pocTotal = tot;
+            pocIdx = j;
+          }
         }
-    </script>
+        
+        if (pocIdx < 0) return; // No POC found
+
+        const poc = levels[pocIdx];
+        
+        // --- THE FIX ---
+        // Calculate the top and bottom of the POC level consistently using the tick size.
+        // This ensures the outline is exactly one tick high and prevents it from
+        // stretching downwards if there are gaps in the data below it.
+        const pocTopPrice = poc.price;
+        const pocBottomPrice = poc.price - liveData.tick;
+
+        const y1 = candleSeries.priceToCoordinate(pocTopPrice);
+        const y2 = candleSeries.priceToCoordinate(pocBottomPrice);
+        if (y1 == null || y2 == null) return;
+
+        const top = Math.min(y1, y2);
+        const bottom = Math.max(y1, y2);
+        if (bottom <= top) return;
+
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        // The 'rect' parameter you are passing is correct, so the width and x-position are fine.
+        // This draws the rectangle within the correct panel.
+        ctx.strokeRect(Math.round(rect.left), Math.round(top), Math.round(rect.width), Math.round(bottom - top));
+      };
+
+      function drawRightProfile(mode) {
+                if (mode === 'off') return;
+
+        // --- FIX 2: Correctly filter bars for "session" mode ---
+        let barsToProcess;
+        if (mode === 'visible') {
+            barsToProcess = visibles;
+        } else if (mode === 'session') {
+            if (liveData.bars.length === 0) return;
+            // Determine the session date from the very last bar in the full dataset.
+            const lastBarTime = liveData.bars[liveData.bars.length - 1].time;
+            const sessionDate = new Date(lastBarTime * 1000);
+
+            // Get the start of that UTC day (00:00:00).
+            const sessionStart = Date.UTC(sessionDate.getUTCFullYear(), sessionDate.getUTCMonth(), sessionDate.getUTCDate(), 0, 0, 0, 0) / 1000;
+            // Get the end of that UTC day (23:59:59).
+            const sessionEnd = sessionStart + (24 * 60 * 60) - 1;
+
+            // Filter all historical bars to get only those from the determined session day.
+            barsToProcess = liveData.bars.filter(b => b.time >= sessionStart && b.time <= sessionEnd);
+        } else {
+            return; // Should not happen
+        }
+
+        const agg = new Map();
+        let maxAgg = 1, sumAgg = 0;
+        // Use the correctly filtered 'barsToProcess' list
+        for (const b of barsToProcess) {
+          const levels = liveData.footprints.get(b.time) || [];
+          for (const lv of levels) {
+            const key = lv.price;
+            const obj = agg.get(key) || { bid: 0, ask: 0 };
+            obj.bid += lv.bidVol; obj.ask += lv.askVol;
+            agg.set(key, obj);
+          }
+        }
+        const rows = Array.from(agg.entries()).map(([price, {bid, ask}]) => ({ price: Number(price), bid, ask, total: bid + ask }));
+        rows.sort((a,b) => a.price - b.price);
+        for (const r of rows) { if (r.total > maxAgg) maxAgg = r.total; sumAgg += r.total; }
+        if (!rows.length) return;
+
+        let pocIdx = 0; for (let i = 1; i < rows.length; i++) if (rows[i].total > rows[pocIdx].total) pocIdx = i;
+        const target = sumAgg * opts.valueAreaPct;
+        let vahIdx = pocIdx, valIdx = pocIdx, acc = rows[pocIdx].total;
+        let L = pocIdx - 1, R = pocIdx + 1;
+        while (acc < target && (L >= 0 || R < rows.length)) {
+          const leftVal = L >= 0 ? rows[L].total : -1;
+          const rightVal = R < rows.length ? rows[R].total : -1;
+          if (rightVal > leftVal) { acc += rightVal; vahIdx = R; R++; }
+          else { acc += leftVal; valIdx = L; L--; }
+        }
+
+        const profW = Math.min(Math.max(30, opts.rightProfileWidth), Math.floor(width * 0.5));
+        const gap = Math.max(0, opts.rightProfileGap);
+        const right = width - gap;
+        const left = Math.max(0, right - profW);
+
+        ctx.save();
+        ctx.translate(0.5, 0.5);
+
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i];
+          const y1 = candleSeries.priceToCoordinate(r.price);
+          const y2 = candleSeries.priceToCoordinate(r.price + liveData.tick);
+          if (y1 == null || y2 == null) continue;
+          const top = Math.min(y1, y2), bottom = Math.max(y1, y2);
+          const h = bottom - top;
+          if (h < 2) continue;
+
+          const wTotal = Math.max(1, Math.floor((r.total / maxAgg) * (right - left)));
+          const askW = Math.round(wTotal * (r.ask / (r.total || 1)));
+          const bidW = wTotal - askW;
+          const xAskStart = right - askW;
+          const xBidStart = xAskStart - bidW;
+
+          ctx.fillStyle = 'rgba(239,68,68,0.8)';
+          ctx.fillRect(xBidStart, top, bidW, h);
+          ctx.fillStyle = 'rgba(16,185,129,0.8)';
+          ctx.fillRect(xAskStart, top, askW, h);
+
+          if (h >= 12 && wTotal >= 24) {
+            ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
+            ctx.fillStyle = '#e5e7eb';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(fmtNum(r.total), right - 2, top + h / 2);
+          }
+          if (opts.showPOC && i === pocIdx) {
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(right - wTotal, top, wTotal, h);
+          }
+        }
+
+        const vahY1 = candleSeries.priceToCoordinate(rows[vahIdx].price);
+        const vahY2 = candleSeries.priceToCoordinate(rows[vahIdx].price + liveData.tick);
+        const valY1 = candleSeries.priceToCoordinate(rows[valIdx].price);
+        const valY2 = candleSeries.priceToCoordinate(rows[valIdx].price + liveData.tick);
+
+        ctx.setLineDash([4, 3]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#60a5fa';
+        if (vahY1 != null && vahY2 != null) {
+          const y = Math.round((Math.min(vahY1, vahY2) + Math.max(vahY1, vahY2)) / 2);
+          ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
+        }
+        ctx.strokeStyle = '#a78bfa';
+        if (valY1 != null && valY2 != null) {
+          const y = Math.round((Math.min(valY1, valY2) + Math.max(valY1, valY2)) / 2);
+          ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.translate(0.5, 0.5);
+
+      for (let i = 0; i < visibles.length; i++) {
+        const vb = visibles[i];
+        const levels = liveData.footprints.get(vb.time);
+        if (!levels || !levels.length) continue;
+
+        const slotLeft = Math.round(vb.x - spacing / 2 + slotPad);
+        const slotRight = Math.round(vb.x + spacing / 2 - slotPad);
+        const slotW = Math.max(4, slotRight - slotLeft);
+        
+        // This value is still needed for positioning the stats block at the bottom
+        const yLow  = candleSeries.priceToCoordinate(vb.low);
+        if (yLow == null) continue;
+        const barYBot = yLow;
+
+        const s = barStats.get(vb.time) || { delta: 0, total: 0, minDeltaMag: 0, maxDeltaMag: 0, cumDelta: 0 };
+        let cRect = null, fRect = null, pRect = null;
+
+        if (opts.placement === 'overlay') {
+          const fullRect = { left: slotLeft, width: slotW };
+          if (opts.showProfile) drawProfileInRect(levels, fullRect);
+          if (opts.showFootprint) drawFootprintInRect(vb, levels, fullRect);
+          outlinePOC(levels, fullRect);
+        } else {
+          const active = [];
+          if (opts.showCandle) active.push('c');
+          if (opts.showFootprint) active.push('f');
+          if (opts.showProfile) active.push('p');
+
+          if (active.length > 0) {
+            const splits = { ...opts.split };
+            let totalPct = active.reduce((sum, k) => sum + (splits[k] || 0), 0);
+            if (totalPct <= 0) {
+              if (active.length === 2 && active.includes('c') && active.includes('f')) splits.c = 20, splits.f = 80;
+              else if (active.length === 2 && active.includes('f') && active.includes('p')) splits.f = 50, splits.p = 50;
+              else { splits.c = 20; splits.f = 50; splits.p = 30; }
+              totalPct = active.reduce((s, k) => s + (splits[k] || 0), 0);
+            }
+
+            const innerW = Math.max(minPanelW, slotW - (active.length - 1) * panelGap);
+            let cursor = slotLeft;
+            for (let idx = 0; idx < active.length; idx++) {
+              const key = active[idx];
+              const isLast = idx === active.length - 1;
+              const w = Math.max(minPanelW, Math.floor(innerW * (splits[key] || 0) / totalPct));
+              const rect = { left: Math.round(cursor), width: w };
+              if (key === 'c') cRect = rect;
+              if (key === 'f') fRect = rect;
+              if (key === 'p') pRect = rect;
+              cursor += w + (isLast ? 0 : panelGap);
+            }
+          }
+
+          if (cRect && opts.showCandle) drawThinCandle(vb, cRect);
+          if (pRect && opts.showProfile) { drawProfileInRect(levels, pRect); outlinePOC(levels, pRect); }
+          if (fRect && opts.showFootprint) { drawFootprintInRect(vb, levels, fRect); outlinePOC(levels, fRect); }
+        }
+
+               if (opts.showStats) {
+          const centerX = (slotLeft + slotRight) / 2;
+          const border = 'rgba(148,163,184,0.25)';
+          const bg = 'rgba(2,6,23,0.66)';
+          const gap = 2;
+
+          // --- FIX 1: Move stats block further down ---
+          // Calculate the pixel height of a single price tick at the bottom of the candle
+          const yOneTickBelow = candleSeries.priceToCoordinate(vb.low - liveData.tick);
+          // Use a default height if the price is off-screen
+          const tickHeight = (yOneTickBelow != null) ? Math.abs(yOneTickBelow - yLow) : 10;
+          
+          // Start the stats block further down, using 2x the tick height as a dynamic gap
+          let nextTop = Math.min(height - 6, Math.round(barYBot + 1 * tickHeight + 4)); // Added a 4px margin
+
+          let r = drawClampedPillTop(ctx, `cumΔ ${fmtNum(s.cumDelta)}`, nextTop, centerX, slotLeft, slotRight, { bg, border, fg: s.cumDelta >= 0 ? '#60a5fa' : '#f472b6' }, 9);
+          if (r.drawn) nextTop = r.y + r.h + gap; else continue;
+          r = drawClampedPillTop(ctx, `Δ ${fmtNum(s.delta)}`, nextTop, centerX, slotLeft, slotRight, { bg, border, fg: s.delta >= 0 ? '#34d399' : '#f87171' }, 10);
+          if (r.drawn) nextTop = r.y + r.h + gap; else continue;
+          r = drawClampedPillTop(ctx, `minΔ ${fmtNum(s.minDeltaMag)}`, nextTop, centerX, slotLeft, slotRight, { bg, border, fg: '#f87171' }, 9);
+          if (r.drawn) nextTop = r.y + r.h + gap; else continue;
+          r = drawClampedPillTop(ctx, `maxΔ ${fmtNum(s.maxDeltaMag)}`, nextTop, centerX, slotLeft, slotRight, { bg, border, fg: '#34d399' }, 9);
+          if (r.drawn) nextTop = r.y + r.h + gap; else continue;
+          drawClampedPillTop(ctx, `Vol ${fmtNum(s.total)}`, nextTop, centerX, slotLeft, slotRight, { bg, border, fg: '#e5e7eb' }, 10);
+        }
+      }
+      ctx.restore();
+      drawRightProfile(opts.rightProfileMode);
+    }
+
+    // ---------- DATA HANDLING & SERVER COMMUNICATION ----------
+    function computeSingleBarStats(barData, lastCumulativeDelta) {
+      const levels = barData.levels || [];
+      let sumAsk = 0, sumBid = 0, minD = Infinity, maxD = -Infinity;
+      for (const lv of levels) {
+        sumAsk += lv.askVol; sumBid += lv.bidVol;
+        const d = lv.askVol - lv.bidVol;
+        if (d < minD) minD = d;
+        if (d > maxD) maxD = d;
+      }
+      const delta = sumAsk - sumBid;
+      const total = sumAsk + sumBid;
+      const minDeltaMag = Math.abs(Math.min(0, Number.isFinite(minD) ? minD : 0));
+      const maxDeltaMag = Math.max(0, Number.isFinite(maxD) ? maxD : 0);
+      const cumDelta = lastCumulativeDelta + delta;
+
+      barStats.set(barData.time, { delta, total, minDeltaMag, maxDeltaMag, cumDelta });
+      return cumDelta;
+    }
+
+    function processNewBar(barData, lastCumDelta = 0) {
+      const { time, open, high, low, close, levels } = barData;
+      liveData.bars.push({ time, open, high, low, close });
+      liveData.footprints.set(time, levels);
+      return computeSingleBarStats(barData, lastCumDelta);
+    }
+
+    function processStreamedBar(barData) {
+      const lastBar = liveData.bars.length > 0 ? liveData.bars[liveData.bars.length - 1] : null;
+      let prevCumDelta = 0;
+      if (lastBar) {
+        if (lastBar.time === barData.time) {
+          const secondLastBar = liveData.bars.length > 1 ? liveData.bars[liveData.bars.length - 2] : null;
+          if (secondLastBar) {
+            prevCumDelta = (barStats.get(secondLastBar.time) || { cumDelta: 0 }).cumDelta;
+          }
+        } else {
+          prevCumDelta = (barStats.get(lastBar.time) || { cumDelta: 0 }).cumDelta;
+        }
+      }
+
+      liveData.footprints.set(barData.time, barData.levels);
+      computeSingleBarStats(barData, prevCumDelta);
+      candleSeries.update(barData);
+
+      if (lastBar && lastBar.time === barData.time) {
+        Object.assign(lastBar, barData);
+      } else {
+        liveData.bars.push(barData);
+      }
+    }
+
+    async function initializeChart() {
+      const statusEl = document.getElementById('status');
+      try {
+        statusEl.textContent = 'Loading...';
+        const settingsResp = await fetch('/settings');
+        if (!settingsResp.ok) throw new Error(`HTTP error! status: ${settingsResp.status}`);
+        const settings = await settingsResp.json();
+        liveData.tick = settings.tickSize;
+        candleSeries.applyOptions({ priceFormat: { type: 'price', precision: 2, minMove: settings.tickSize } });
+        $('interval-min').value = settings.interval;
+        $('tick-size').value = settings.tickSize;
+
+        const historyResp = await fetch('/history');
+        if (!historyResp.ok) throw new Error(`HTTP error! status: ${historyResp.status}`);
+        const historyData = await historyResp.json();
+
+        liveData.bars = [];
+        liveData.footprints.clear();
+        barStats.clear();
+        let lastCumDelta = 0;
+        for (const bar of historyData) {
+          lastCumDelta = processNewBar(bar, lastCumDelta);
+        }
+        candleSeries.setData(liveData.bars);
+        chart.timeScale().fitContent();
+        draw();
+        statusEl.textContent = 'History loaded. Listening for live data...';
+        startLiveUpdates();
+      } catch (error) {
+        console.error("Initialization failed:", error);
+        statusEl.textContent = `Error: ${error.message}. Check console.`;
+      }
+    }
+
+    function startLiveUpdates() {
+      const eventSource = new EventSource('/stream');
+      const statusEl = document.getElementById('status');
+      eventSource.onopen = () => { statusEl.textContent = 'Live connection established.'; };
+      eventSource.onmessage = function(event) {
+        const newBarData = JSON.parse(event.data);
+        processStreamedBar(newBarData);
+        draw();
+      };
+      eventSource.onerror = function(err) {
+        console.error("EventSource failed:", err);
+        statusEl.textContent = 'Connection lost. Please refresh.';
+        eventSource.close();
+      };
+    }
+
+    $('update-settings').addEventListener('click', async () => {
+      const interval = $('interval-min').value;
+      const tickSize = $('tick-size').value;
+      document.getElementById('status').textContent = 'Applying new settings...';
+      try {
+        await fetch('/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ interval: Number(interval), tickSize: Number(tickSize) })
+        });
+        window.location.reload();
+      } catch (error) {
+        document.getElementById('status').textContent = 'Failed to apply settings.';
+      }
+    });
+
+    // ---------- Wiring & Initial Load ----------
+    const ro = new ResizeObserver(() => {
+      chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
+      syncCanvasSize();
+      draw();
+    });
+    ro.observe(document.getElementById('chart-wrap'));
+
+    chart.timeScale().subscribeVisibleTimeRangeChange(() => draw());
+    chart.subscribeCrosshairMove(() => draw());
+
+    let lastDpr = dpr();
+    setInterval(() => {
+      const now = dpr();
+      if (now !== lastDpr) { lastDpr = now; syncCanvasSize(); draw(); }
+    }, 500);
+
+    initializeChart();
+
+  </script>
 </body>
 </html>
